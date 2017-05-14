@@ -22,7 +22,7 @@ type Cron struct {
 
 // Job is an interface for submitted cron jobs.
 type Job interface {
-	Run()
+	Run(e *Entry)
 }
 
 // The Schedule describes a job's duty cycle.
@@ -47,6 +47,8 @@ type Entry struct {
 
 	// The Job to run.
 	Job Job
+
+	Param interface{}
 }
 
 // byTime is a wrapper for sorting the entry array by time
@@ -87,30 +89,31 @@ func NewWithLocation(location *time.Location) *Cron {
 }
 
 // A wrapper that turns a func() into a cron.Job
-type FuncJob func()
+type FuncJob func(e *Entry)
 
-func (f FuncJob) Run() { f() }
+func (f FuncJob) Run(e *Entry) { f(e) }
 
 // AddFunc adds a func to the Cron to be run on the given schedule.
-func (c *Cron) AddFunc(spec string, cmd func()) error {
-	return c.AddJob(spec, FuncJob(cmd))
+func (c *Cron) AddFunc(spec string, cmd func(e *Entry), param interface{}) error {
+	return c.AddJob(spec, FuncJob(cmd), param)
 }
 
 // AddJob adds a Job to the Cron to be run on the given schedule.
-func (c *Cron) AddJob(spec string, cmd Job) error {
+func (c *Cron) AddJob(spec string, cmd Job, param interface{}) error {
 	schedule, err := Parse(spec)
 	if err != nil {
 		return err
 	}
-	c.Schedule(schedule, cmd)
+	c.Schedule(schedule, cmd, param)
 	return nil
 }
 
 // Schedule adds a Job to the Cron to be run on the given schedule.
-func (c *Cron) Schedule(schedule Schedule, cmd Job) {
+func (c *Cron) Schedule(schedule Schedule, cmd Job, param interface{}) {
 	entry := &Entry{
 		Schedule: schedule,
 		Job:      cmd,
+		Param:    param,
 	}
 	if !c.running {
 		c.entries = append(c.entries, entry)
@@ -153,7 +156,7 @@ func (c *Cron) Run() {
 	c.run()
 }
 
-func (c *Cron) runWithRecovery(j Job) {
+func (c *Cron) runWithRecovery(j Job, e *Entry) {
 	defer func() {
 		if r := recover(); r != nil {
 			const size = 64 << 10
@@ -162,7 +165,7 @@ func (c *Cron) runWithRecovery(j Job) {
 			c.logf("cron: panic running job: %v\n%s", r, buf)
 		}
 	}()
-	j.Run()
+	j.Run(e)
 }
 
 // Run the scheduler.. this is private just due to the need to synchronize
@@ -196,7 +199,7 @@ func (c *Cron) run() {
 				if e.Next != effective {
 					break
 				}
-				go c.runWithRecovery(e.Job)
+				go c.runWithRecovery(e.Job, e)
 				e.Prev = e.Next
 				e.Next = e.Schedule.Next(now)
 			}
